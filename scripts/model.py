@@ -8,6 +8,22 @@ from pyspark.ml.tuning import ParamGridBuilder, CrossValidator
 import numpy as np
 import os
 
+def undersample(df: DataFrame, label_col: str = "label", seed: int = 42) -> DataFrame:
+    """Return a DataFrame in which every class has the same number of rows
+       (equal to the *smallest* class)."""
+    counts = df.groupBy(label_col).count().collect()
+    smallest = min(r["count"] for r in counts)
+
+    balanced = None
+    for row in counts:
+        frac = smallest / row["count"]
+        subset = (
+            df.filter(col(label_col) == row[label_col])
+              .sample(withReplacement=False, fraction=frac, seed=seed)
+        )
+        balanced = subset if balanced is None else balanced.union(subset)
+    return balanced
+
 team = "team30"
 warehouse = "project/hive/warehouse"
 spark = SparkSession.builder\
@@ -21,7 +37,7 @@ spark = SparkSession.builder\
 
 # Read Hive table
 df = spark.read.table('team30_projectdb.nypd_complaints_part')
-df = df.orderBy("CMPLNT_FR_DT").limit(1000)
+df = df.orderBy("CMPLNT_FR_DT").limit(1000000)
 
 # Define features and target
 categorical_cols = ['ADDR_PCT_CD', 'BORO_NM', 'LOC_OF_OCCUR_DESC', 'PREM_TYP_DESC', 'JURIS_DESC', 
@@ -88,6 +104,8 @@ pipeline = Pipeline(stages=indexers + encoders + [imputer, assembler])
 model = pipeline.fit(df)
 df_transformed = model.transform(df)
 
+df_transformed = undersample(df=df_transformed, label_col=target)
+
 df_transformed = df_transformed.select(["features", target])
 
 # Index target variable
@@ -114,29 +132,19 @@ evaluator_accuracy = MulticlassClassificationEvaluator(labelCol="label", predict
 evaluator_f1 = MulticlassClassificationEvaluator(labelCol="label", predictionCol="prediction", metricName="f1")
 
 # Model 1: Random Forest Classifier
-print("_________________1__________________")
 rf = RandomForestClassifier(labelCol="label", featuresCol="features")
-print("_________________2__________________")
 paramGrid_rf = ParamGridBuilder()\
     .addGrid(rf.numTrees, [10, 20, 30])\
     .addGrid(rf.maxDepth, [5, 10, 15])\
     .addGrid(rf.maxBins, [32, 64, 128])\
     .build()
-print("_________________3__________________")
 cv_rf = CrossValidator(estimator=rf, estimatorParamMaps=paramGrid_rf, evaluator=evaluator_f1, numFolds=3)
-print("_________________4__________________")
 cv_model_rf = cv_rf.fit(train_data)
-print("_________________5__________________")
 best_rf_model = cv_model_rf.bestModel
-print("_________________6__________________")
 predictions_rf = best_rf_model.transform(test_data)
-print("_________________7__________________")
 accuracy_rf = evaluator_accuracy.evaluate(predictions_rf)
-print("_________________8__________________")
 f1_rf = evaluator_f1.evaluate(predictions_rf)
-print("_________________9__________________")
 best_rf_model.write().overwrite().save("project/models/model_rf")
-print("_________________10__________________")
 run("hdfs dfs -get project/models/model_rf models/model_rf")
 predictions_rf.select("label", "prediction").coalesce(1).write.mode("overwrite").format("csv").option("sep", ",").option("header", "true").save("project/output/model_rf_predictions.csv")
 
@@ -155,34 +163,22 @@ save_hdfs_to_local("project/output/model_rf_predictions.csv/*.csv", "output/mode
 
 # Model 2: One-vs-Rest with Linear SVC
 lsvc = LinearSVC(maxIter=10)
-print("_________________11__________________")
 ovr = OneVsRest(classifier=lsvc, labelCol="label", featuresCol="features")
-print("_________________12__________________")
 paramGrid_ovr = ParamGridBuilder()\
     .addGrid(lsvc.regParam, [0.001, 0.01, 0.1])\
     .addGrid(lsvc.maxIter, [10, 50, 100])\
     .addGrid(lsvc.tol, [1e-6, 1e-5, 1e-4])\
     .build()
-print("_________________13__________________")
 cv_ovr = CrossValidator(estimator=ovr, estimatorParamMaps=paramGrid_ovr, evaluator=evaluator_f1, numFolds=3)
-print("_________________14__________________")
 cv_model_ovr = cv_ovr.fit(train_data)
-print("_________________15__________________")
 best_ovr_model = cv_model_ovr.bestModel
-print("_________________16__________________")
 predictions_ovr = best_ovr_model.transform(test_data)
-print("_________________17__________________")
 accuracy_ovr = evaluator_accuracy.evaluate(predictions_ovr)
-print("_________________18__________________")
 f1_ovr = evaluator_f1.evaluate(predictions_ovr)
-print("_________________19__________________")
 best_ovr_model.write().overwrite().save("project/models/model_ovr")
-print("_________________20__________________")
 run("hdfs dfs -get project/models/model_ovr models/model_ovr")
-print("_________________21__________________")
 predictions_ovr.select("label", "prediction").coalesce(1).write.mode("overwrite").format("csv").option("sep", ",").option("header", "true").save("project/output/model_ovr_predictions.csv")
 save_hdfs_to_local("project/output/model_ovr_predictions.csv/*.csv", "output/model_ovr_predictions_output.csv")
-print("_________________22__________________")
 
 # Model 3: Naive Bayes
 nb = NaiveBayes(labelCol="label", featuresCol="features")
