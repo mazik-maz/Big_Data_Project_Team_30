@@ -1,4 +1,4 @@
-from pyspark.sql import SparkSession
+from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql.functions import when, col, from_unixtime, to_timestamp, year, month, dayofmonth, hour, sin, cos, lit
 from pyspark.ml.feature import StringIndexer, OneHotEncoder, Imputer, VectorAssembler
 from pyspark.ml import Pipeline
@@ -37,7 +37,7 @@ spark = SparkSession.builder\
 
 # Read Hive table
 df = spark.read.table('team30_projectdb.nypd_complaints_part')
-df = df.orderBy("CMPLNT_FR_DT").limit(1000000)
+df = df.orderBy("CMPLNT_FR_DT").limit(2000000)
 
 # Define features and target
 categorical_cols = ['ADDR_PCT_CD', 'BORO_NM', 'LOC_OF_OCCUR_DESC', 'PREM_TYP_DESC', 'JURIS_DESC', 
@@ -165,9 +165,9 @@ save_hdfs_to_local("project/output/model_rf_predictions.csv/*.csv", "output/mode
 lsvc = LinearSVC(maxIter=10)
 ovr = OneVsRest(classifier=lsvc, labelCol="label", featuresCol="features")
 paramGrid_ovr = ParamGridBuilder()\
-    .addGrid(lsvc.regParam, [0.001, 0.01, 0.1])\
-    .addGrid(lsvc.maxIter, [10, 50, 100])\
-    .addGrid(lsvc.tol, [1e-6, 1e-5, 1e-4])\
+    .addGrid(lsvc.regParam, [0.001, 0.1])\
+    .addGrid(lsvc.maxIter, [10, 100])\
+    .addGrid(lsvc.tol, [1e-6, 1e-4])\
     .build()
 cv_ovr = CrossValidator(estimator=ovr, estimatorParamMaps=paramGrid_ovr, evaluator=evaluator_f1, numFolds=3)
 cv_model_ovr = cv_ovr.fit(train_data)
